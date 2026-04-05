@@ -15,6 +15,8 @@ Small macOS CLI that converts `MHT` / `MHTML` files into Safari-compatible `.web
 swift build
 ```
 
+GitHub Actions must install Swift `6.3` before building because the package manifest uses `// swift-tools-version: 6.3`.
+
 ## Test
 
 ```bash
