@@ -1,6 +1,6 @@
 import Foundation
 import WebKit
-import MHTWebArchiveSubstackCompatibility
+import MHTWebArchiveImageCompatibility
 
 public enum MHTConversionError: Error, LocalizedError {
     case invalidMHT(String)
@@ -71,7 +71,7 @@ public enum MHTConverter {
             try ResolvedPart(part: part, index: index, baseURL: baseURL)
         }
 
-        applySubstackCompatibility(to: &resolvedParts)
+        applyImageCompatibility(to: &resolvedParts)
 
         let mainPart = try selectMainPart(from: resolvedParts, startHint: contentType.parameters["start"])
         let mainURL = mainPart.resolvedURL ?? sourceURL ?? URL(fileURLWithPath: "/")
@@ -97,7 +97,7 @@ public enum MHTConverter {
                 ) else {
                     throw MHTConversionError.archiveCreationFailed
                 }
-                let aliasResources = try makeSubstackAliasResources(for: part)
+                let aliasResources = try makeImageAliasResources(for: part)
                 return [resource] + aliasResources
             }
 
@@ -165,9 +165,9 @@ public enum MHTConverter {
         }
     }
 
-    private static func applySubstackCompatibility(to parts: inout [ResolvedPart]) {
+    private static func applyImageCompatibility(to parts: inout [ResolvedPart]) {
         var compatibilityParts = parts.map { part in
-            SubstackCompatibilityPart(
+            ImageCompatibilityPart(
                 index: part.index,
                 mimeType: part.mimeType,
                 charset: part.charset,
@@ -175,14 +175,14 @@ public enum MHTConverter {
                 decodedBody: part.decodedBody
             )
         }
-        SubstackSafariCompatibility.rewriteHTML(in: &compatibilityParts)
+        ImageVariantSafariCompatibility.rewriteHTML(in: &compatibilityParts)
         for index in parts.indices {
             parts[index].decodedBody = compatibilityParts[index].decodedBody
         }
     }
 
-    private static func makeSubstackAliasResources(for part: ResolvedPart) throws -> [WebResource] {
-        let compatibilityPart = SubstackCompatibilityPart(
+    private static func makeImageAliasResources(for part: ResolvedPart) throws -> [WebResource] {
+        let compatibilityPart = ImageCompatibilityPart(
             index: part.index,
             mimeType: part.mimeType,
             charset: part.charset,
@@ -190,7 +190,7 @@ public enum MHTConverter {
             decodedBody: part.decodedBody
         )
 
-        return try SubstackSafariCompatibility.aliasResources(for: compatibilityPart).map { alias in
+        return try ImageVariantSafariCompatibility.aliasResources(for: compatibilityPart).map { alias in
             guard let resource = WebResource(
                 data: alias.data,
                 url: alias.url,

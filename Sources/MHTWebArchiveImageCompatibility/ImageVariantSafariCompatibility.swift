@@ -2,7 +2,7 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-public struct SubstackCompatibilityPart {
+public struct ImageCompatibilityPart {
     public let index: Int
     public let mimeType: String
     public let charset: String?
@@ -25,7 +25,7 @@ public struct SubstackCompatibilityPart {
     }
 }
 
-public struct SubstackAliasResource {
+public struct ImageAliasResource {
     public let data: Data
     public let url: URL
     public let mimeType: String
@@ -39,16 +39,16 @@ public struct SubstackAliasResource {
     }
 }
 
-public enum SubstackSafariCompatibility {
-    public static func rewriteHTML(in parts: inout [SubstackCompatibilityPart]) {
+public enum ImageVariantSafariCompatibility {
+    public static func rewriteHTML(in parts: inout [ImageCompatibilityPart]) {
         let resolvedURLs = parts.compactMap { $0.resolvedURL?.absoluteString }
-        let availableVariants = parts.compactMap { part -> SubstackImageVariant? in
+        let availableVariants = parts.compactMap { part -> VariantURL? in
             guard let urlString = part.resolvedURL?.absoluteString else {
                 return nil
             }
-            return SubstackImageVariant(urlString: urlString)
+            return VariantURL(urlString: urlString)
         }
-        let syntheticAliasVariants = availableVariants.compactMap { variant -> SubstackImageVariant? in
+        let syntheticAliasVariants = availableVariants.compactMap { variant -> VariantURL? in
             guard variant.format == "f_webp" else {
                 return nil
             }
@@ -56,7 +56,7 @@ public enum SubstackSafariCompatibility {
             guard aliasURL != variant.urlString else {
                 return nil
             }
-            return SubstackImageVariant(urlString: aliasURL)
+            return VariantURL(urlString: aliasURL)
         }
         let availableURLs = Set(resolvedURLs + syntheticAliasVariants.map(\.urlString))
         let allVariants = availableVariants + syntheticAliasVariants
@@ -77,13 +77,13 @@ public enum SubstackSafariCompatibility {
                 continue
             }
 
-            var rewrittenHTML = rewriteSubstackPictureBlocks(
+            var rewrittenHTML = rewritePictureBlocks(
                 in: html,
                 availableURLs: availableURLs,
                 preferredURLsByAsset: preferredURLsByAsset
             )
 
-            rewrittenHTML = rewriteSubstackImageURLs(
+            rewrittenHTML = rewriteImageURLs(
                 in: rewrittenHTML,
                 availableURLs: availableURLs,
                 preferredURLsByAsset: preferredURLsByAsset
@@ -95,29 +95,24 @@ public enum SubstackSafariCompatibility {
         }
     }
 
-    public static func aliasResources(for part: SubstackCompatibilityPart) -> [SubstackAliasResource] {
+    public static func aliasResources(for part: ImageCompatibilityPart) -> [ImageAliasResource] {
         guard
             let resolvedURL = part.resolvedURL,
             part.mimeType.lowercased().hasPrefix("image/"),
-            let host = resolvedURL.host?.lowercased(),
-            host == "substackcdn.com"
+            let variant = VariantURL(urlString: resolvedURL.absoluteString),
+            variant.format == "f_webp"
         else {
             return []
         }
 
-        let absoluteString = resolvedURL.absoluteString
-        guard absoluteString.contains("/image/fetch/"), absoluteString.contains(",f_webp,") else {
-            return []
-        }
-
-        let aliasURLString = absoluteString.replacingOccurrences(of: ",f_webp,", with: ",f_auto,")
-        guard aliasURLString != absoluteString, let aliasURL = URL(string: aliasURLString) else {
+        let aliasURLString = variant.urlString.replacingOccurrences(of: ",f_webp,", with: ",f_auto,")
+        guard aliasURLString != variant.urlString, let aliasURL = URL(string: aliasURLString) else {
             return []
         }
 
         let aliasPayload = transcodeImageDataIfNeeded(part.decodedBody, aliasURL: aliasURL)
         return [
-            SubstackAliasResource(
+            ImageAliasResource(
                 data: aliasPayload.data,
                 url: aliasURL,
                 mimeType: aliasPayload.mimeType,
@@ -173,25 +168,14 @@ public enum SubstackSafariCompatibility {
     }
 
     private static func preferredAliasImageExtension(for aliasURL: URL) -> String {
-        let absoluteString = aliasURL.absoluteString
-        if let nestedRange = absoluteString.range(of: "/https%3A", options: .backwards) {
-            let nestedEncodedURL = String(absoluteString[absoluteString.index(after: nestedRange.lowerBound)...])
-            if
-                let nestedDecodedURL = nestedEncodedURL.removingPercentEncoding,
-                let nestedURL = URL(string: nestedDecodedURL)
-            {
-                let nestedExtension = nestedURL.pathExtension.lowercased()
-                if !nestedExtension.isEmpty {
-                    return nestedExtension
-                }
-            }
+        if let variant = VariantURL(urlString: aliasURL.absoluteString) {
+            return variant.originalAssetExtension
         }
-
         return aliasURL.pathExtension.lowercased()
     }
 
     private static func fetchOriginalAssetDataIfAvailable(for aliasURL: URL) -> (data: Data, mimeType: String) {
-        guard let originalAssetURL = originalAssetURL(from: aliasURL) else {
+        guard let originalAssetURL = VariantURL(urlString: aliasURL.absoluteString)?.originalAssetURL else {
             return (Data(), "image/webp")
         }
 
@@ -210,24 +194,12 @@ public enum SubstackSafariCompatibility {
         }
     }
 
-    private static func originalAssetURL(from aliasURL: URL) -> URL? {
-        let absoluteString = aliasURL.absoluteString
-        guard let nestedRange = absoluteString.range(of: "/https%3A", options: .backwards) else {
-            return nil
-        }
-        let nestedEncodedURL = String(absoluteString[absoluteString.index(after: nestedRange.lowerBound)...])
-        guard let nestedDecodedURL = nestedEncodedURL.removingPercentEncoding else {
-            return nil
-        }
-        return URL(string: nestedDecodedURL)
-    }
-
-    private static func rewriteSubstackImageURLs(
+    private static func rewriteImageURLs(
         in html: String,
         availableURLs: Set<String>,
         preferredURLsByAsset: [String: String]
     ) -> String {
-        guard let regex = try? NSRegularExpression(pattern: #"https://substackcdn\.com/image/fetch/[^"'\s<>)]+"#) else {
+        guard let regex = try? NSRegularExpression(pattern: #"https?://[^"'\s<>)]+"#) else {
             return html
         }
 
@@ -244,12 +216,12 @@ public enum SubstackSafariCompatibility {
             }
 
             let urlString = String(rewrittenHTML[range])
-            guard !availableURLs.contains(urlString) else {
+            guard !availableURLs.contains(urlString), let variant = VariantURL(urlString: urlString) else {
                 continue
             }
 
-            let replacementURL = replacementSubstackImageURL(
-                for: urlString,
+            let replacementURL = replacementImageURL(
+                for: variant,
                 availableURLs: availableURLs,
                 preferredURLsByAsset: preferredURLsByAsset
             )
@@ -263,7 +235,7 @@ public enum SubstackSafariCompatibility {
         return rewrittenHTML
     }
 
-    private static func rewriteSubstackPictureBlocks(
+    private static func rewritePictureBlocks(
         in html: String,
         availableURLs: Set<String>,
         preferredURLsByAsset: [String: String]
@@ -285,11 +257,11 @@ public enum SubstackSafariCompatibility {
             }
 
             let pictureHTML = String(rewrittenHTML[pictureRange])
-            guard pictureHTML.contains("https://substackcdn.com/image/fetch/") else {
+            guard pictureHTML.contains("http://") || pictureHTML.contains("https://") else {
                 continue
             }
 
-            let simplifiedPictureHTML = simplifySubstackPictureBlock(
+            let simplifiedPictureHTML = simplifyPictureBlock(
                 pictureHTML,
                 availableURLs: availableURLs,
                 preferredURLsByAsset: preferredURLsByAsset
@@ -305,7 +277,7 @@ public enum SubstackSafariCompatibility {
         return rewrittenHTML
     }
 
-    private static func simplifySubstackPictureBlock(
+    private static func simplifyPictureBlock(
         _ pictureHTML: String,
         availableURLs: Set<String>,
         preferredURLsByAsset: [String: String]
@@ -336,12 +308,12 @@ public enum SubstackSafariCompatibility {
         }
 
         let originalURL = String(imgTag[srcCaptureRange])
-        guard originalURL.contains("https://substackcdn.com/image/fetch/") else {
+        guard let variant = VariantURL(urlString: originalURL) else {
             return pictureHTML
         }
 
-        let rewrittenURL = preferredHTMLSubstackImageURL(
-            for: originalURL,
+        let rewrittenURL = preferredHTMLImageURL(
+            for: variant,
             availableURLs: availableURLs,
             preferredURLsByAsset: preferredURLsByAsset
         )
@@ -357,41 +329,33 @@ public enum SubstackSafariCompatibility {
         return simplifiedPictureHTML
     }
 
-    private static func replacementSubstackImageURL(
-        for urlString: String,
+    private static func replacementImageURL(
+        for variant: VariantURL,
         availableURLs: Set<String>,
         preferredURLsByAsset: [String: String]
     ) -> String {
-        guard let variant = SubstackImageVariant(urlString: urlString) else {
-            return urlString
-        }
-
         if variant.format == "f_auto" {
-            let autoAlias = urlString.replacingOccurrences(of: ",f_auto,", with: ",f_webp,")
-            if availableURLs.contains(autoAlias) {
-                return autoAlias
+            let webPAlias = variant.urlString.replacingOccurrences(of: ",f_auto,", with: ",f_webp,")
+            if availableURLs.contains(webPAlias) {
+                return webPAlias
             }
         }
 
-        return preferredURLsByAsset[variant.assetKey] ?? urlString
+        return preferredURLsByAsset[variant.assetKey] ?? variant.urlString
     }
 
-    private static func preferredHTMLSubstackImageURL(
-        for urlString: String,
+    private static func preferredHTMLImageURL(
+        for variant: VariantURL,
         availableURLs: Set<String>,
         preferredURLsByAsset: [String: String]
     ) -> String {
-        guard let variant = SubstackImageVariant(urlString: urlString) else {
-            return urlString
-        }
-
-        let autoAlias = urlString.replacingOccurrences(of: ",f_webp,", with: ",f_auto,")
-        if autoAlias != urlString, availableURLs.contains(autoAlias) {
+        let autoAlias = variant.urlString.replacingOccurrences(of: ",f_webp,", with: ",f_auto,")
+        if autoAlias != variant.urlString, availableURLs.contains(autoAlias) {
             return autoAlias
         }
 
-        if variant.format == "f_auto", availableURLs.contains(urlString) {
-            return urlString
+        if variant.format == "f_auto", availableURLs.contains(variant.urlString) {
+            return variant.urlString
         }
 
         if let preferredURL = preferredURLsByAsset[variant.assetKey] {
@@ -402,10 +366,10 @@ public enum SubstackSafariCompatibility {
             return preferredURL
         }
 
-        return urlString
+        return variant.urlString
     }
 
-    private static func preferredVariantOrder(_ lhs: SubstackImageVariant, _ rhs: SubstackImageVariant) -> Bool {
+    private static func preferredVariantOrder(_ lhs: VariantURL, _ rhs: VariantURL) -> Bool {
         if lhs.width != rhs.width {
             return lhs.width > rhs.width
         }
@@ -430,16 +394,20 @@ public enum SubstackSafariCompatibility {
     }
 }
 
-private struct SubstackImageVariant {
+private struct VariantURL {
     let urlString: String
     let assetKey: String
     let format: String?
     let width: Int
+    let originalAssetURL: URL?
+    let originalAssetExtension: String
 
     init?(urlString: String) {
         guard
-            urlString.hasPrefix("https://substackcdn.com/image/fetch/"),
-            let assetRange = urlString.range(of: "/https%3A", options: .backwards)
+            let absoluteURL = URL(string: urlString),
+            let scheme = absoluteURL.scheme?.lowercased(),
+            scheme == "http" || scheme == "https",
+            let assetRange = urlString.range(of: "/https%3A", options: .backwards) ?? urlString.range(of: "/http%3A", options: .backwards)
         else {
             return nil
         }
@@ -449,11 +417,15 @@ private struct SubstackImageVariant {
 
         let transformPrefix = urlString[..<assetRange.lowerBound]
         let transformComponents = transformPrefix.split(separator: ",")
-
         self.format = transformComponents.first(where: { $0.hasPrefix("f_") }).map(String.init)
         self.width = transformComponents
             .first(where: { $0.hasPrefix("w_") })
             .flatMap { Int($0.dropFirst(2)) } ?? 0
+
+        let nestedEncodedURL = String(urlString[urlString.index(after: assetRange.lowerBound)...])
+        let nestedDecodedURL = nestedEncodedURL.removingPercentEncoding
+        self.originalAssetURL = nestedDecodedURL.flatMap(URL.init(string:))
+        self.originalAssetExtension = originalAssetURL?.pathExtension.lowercased() ?? absoluteURL.pathExtension.lowercased()
     }
 }
 
