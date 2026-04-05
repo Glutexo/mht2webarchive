@@ -8,7 +8,7 @@ struct IntegrationTestRunner {
     static func main() {
         let tests: [(String, () throws -> Void)] = [
             ("converter creates webarchive", testConverterCreatesWebArchive),
-            ("converter handles blink binary and cid resources", testBlinkStyleBinaryAndCIDResources),
+            ("converter handles fixture mht with blink binary and cid resources", testFixtureMHTConversion),
             ("single file mode writes requested output", testSingleFileMode),
             ("stdin to file mode works", testStdinToFileMode),
             ("stdin to stdout mode works", testStdoutMode),
@@ -77,16 +77,20 @@ struct IntegrationTestRunner {
         }
     }
 
-    private static func testBlinkStyleBinaryAndCIDResources() throws {
-        let result = try MHTConverter.convert(data: blinkStyleMHTData(), sourceURL: URL(fileURLWithPath: "/tmp/blink.mht"))
+    private static func testFixtureMHTConversion() throws {
+        let fixtureURL = fixtureFileURL()
+        let result = try MHTConverter.convert(data: try Data(contentsOf: fixtureURL), sourceURL: fixtureURL)
         let archive = try loadArchive(from: result.data)
         let mainResource = try unwrap(archive.mainResource, "expected main resource")
-        try expect(mainResource.url?.absoluteString == "https://example.com/article", "expected Blink main resource URL")
+        try expect(
+            mainResource.url?.absoluteString == "https://www.noahpinion.blog/p/how-japan-has-changed-in-the-last?utm_campaign=email-post&r=27g416&utm_source=substack&utm_medium=email",
+            "expected fixture main resource URL"
+        )
 
         let resources = (archive.subresources as? [WebResource]) ?? []
-        try expect(resources.count == 1, "expected one cid subresource")
-        try expect(resources.first?.mimeType == "text/css", "expected CSS cid subresource")
-        try expect(resources.first?.url?.absoluteString == "cid:css-example@mhtml.blink", "expected cid URL to be preserved")
+        try expect(resources.count > 20, "expected many subresources from the fixture MHT")
+        try expect(resources.contains(where: { $0.url?.absoluteString.hasPrefix("cid:css-") == true }), "expected cid stylesheet resources")
+        try expect(resources.contains(where: { $0.mimeType == "image/webp" }), "expected webp image resources")
     }
 
     private static func testStdinToFileMode() throws {
@@ -204,41 +208,18 @@ private func sampleMHTData(title: String = "Hello") -> Data {
     )
 }
 
-private func blinkStyleMHTData() -> Data {
-    Data(
-        """
-        From: <Saved by Blink>
-        Snapshot-Content-Location: https://example.com/article
-        Subject: Blink sample
-        Date: Sat, 4 Apr 2026 16:06:00 +0200
-        MIME-Version: 1.0
-        Content-Type: multipart/related;
-                type="text/html";
-                boundary="----MultipartBoundary--ExampleBoundary----"
-
-        ------MultipartBoundary--ExampleBoundary----
-        Content-Type: text/html
-        Content-ID: <frame@example>
-        Content-Transfer-Encoding: binary
-        Content-Location: https://example.com/article
-
-        <!DOCTYPE html><html><head><link rel="stylesheet" type="text/css" href="cid:css-example@mhtml.blink" /></head><body>Blink</body></html>
-        ------MultipartBoundary--ExampleBoundary----
-        Content-Type: text/css
-        Content-ID: <css-example@mhtml.blink>
-        Content-Transfer-Encoding: binary
-
-        body { background: #fff; }
-        ------MultipartBoundary--ExampleBoundary------
-        """.utf8
-    )
-}
-
 private func withTemporaryDirectory(_ body: (URL) throws -> Void) throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     try body(directory)
+}
+
+private func fixtureFileURL() -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("Fixtures")
+        .appendingPathComponent("noah-smith-japan-changes.mht")
 }
 
 private func loadArchive(at url: URL) throws -> WebArchive {

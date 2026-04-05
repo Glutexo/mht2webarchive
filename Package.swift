@@ -36,7 +36,8 @@ let package = Package(
                 "MHTWebArchiveCore",
                 "MHTWebArchiveCLI",
             ],
-            path: "Tests/mht2webarchiveTests"
+            path: "Tests/mht2webarchiveTests",
+            exclude: ["Fixtures"]
         ),
     ],
     swiftLanguageModes: [.v6]
