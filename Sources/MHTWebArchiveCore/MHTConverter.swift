@@ -268,11 +268,15 @@ enum MIMEParser {
     }
 
     private static func headerBodyBoundary(in bytes: [UInt8]) -> (headerEnd: Int, bodyStart: Int)? {
-        for index in 0..<(bytes.count - 3) where bytes[index] == 13 && bytes[index + 1] == 10 && bytes[index + 2] == 13 && bytes[index + 3] == 10 {
-            return (index, index + 4)
+        if bytes.count >= 4 {
+            for index in 0...(bytes.count - 4) where bytes[index] == 13 && bytes[index + 1] == 10 && bytes[index + 2] == 13 && bytes[index + 3] == 10 {
+                return (index, index + 4)
+            }
         }
-        for index in 0..<(bytes.count - 1) where bytes[index] == 10 && bytes[index + 1] == 10 {
-            return (index, index + 2)
+        if bytes.count >= 2 {
+            for index in 0...(bytes.count - 2) where bytes[index] == 10 && bytes[index + 1] == 10 {
+                return (index, index + 2)
+            }
         }
         return nil
     }

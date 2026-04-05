@@ -8,6 +8,7 @@ struct IntegrationTestRunner {
     static func main() {
         let tests: [(String, () throws -> Void)] = [
             ("converter creates webarchive", testConverterCreatesWebArchive),
+            ("converter handles blink binary and cid resources", testBlinkStyleBinaryAndCIDResources),
             ("single file mode writes requested output", testSingleFileMode),
             ("stdin to file mode works", testStdinToFileMode),
             ("stdin to stdout mode works", testStdoutMode),
@@ -74,6 +75,18 @@ struct IntegrationTestRunner {
             let mainResource = try unwrap(archive.mainResource, "expected main resource in output archive")
             try expect(mainResource.url?.absoluteString == "https://example.com/index.html", "expected output archive HTML URL")
         }
+    }
+
+    private static func testBlinkStyleBinaryAndCIDResources() throws {
+        let result = try MHTConverter.convert(data: blinkStyleMHTData(), sourceURL: URL(fileURLWithPath: "/tmp/blink.mht"))
+        let archive = try loadArchive(from: result.data)
+        let mainResource = try unwrap(archive.mainResource, "expected main resource")
+        try expect(mainResource.url?.absoluteString == "https://example.com/article", "expected Blink main resource URL")
+
+        let resources = (archive.subresources as? [WebResource]) ?? []
+        try expect(resources.count == 1, "expected one cid subresource")
+        try expect(resources.first?.mimeType == "text/css", "expected CSS cid subresource")
+        try expect(resources.first?.url?.absoluteString == "cid:css-example@mhtml.blink", "expected cid URL to be preserved")
     }
 
     private static func testStdinToFileMode() throws {
@@ -187,6 +200,36 @@ private func sampleMHTData(title: String = "Hello") -> Data {
 
         body { color: #123456; }
         ------=_NextPart_000_0000--
+        """.utf8
+    )
+}
+
+private func blinkStyleMHTData() -> Data {
+    Data(
+        """
+        From: <Saved by Blink>
+        Snapshot-Content-Location: https://example.com/article
+        Subject: Blink sample
+        Date: Sat, 4 Apr 2026 16:06:00 +0200
+        MIME-Version: 1.0
+        Content-Type: multipart/related;
+                type="text/html";
+                boundary="----MultipartBoundary--ExampleBoundary----"
+
+        ------MultipartBoundary--ExampleBoundary----
+        Content-Type: text/html
+        Content-ID: <frame@example>
+        Content-Transfer-Encoding: binary
+        Content-Location: https://example.com/article
+
+        <!DOCTYPE html><html><head><link rel="stylesheet" type="text/css" href="cid:css-example@mhtml.blink" /></head><body>Blink</body></html>
+        ------MultipartBoundary--ExampleBoundary----
+        Content-Type: text/css
+        Content-ID: <css-example@mhtml.blink>
+        Content-Transfer-Encoding: binary
+
+        body { background: #fff; }
+        ------MultipartBoundary--ExampleBoundary------
         """.utf8
     )
 }
