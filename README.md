@@ -2,6 +2,13 @@
 
 Small macOS CLI that converts `MHT` / `MHTML` files into Safari-compatible `.webarchive` files.
 
+## What It Converts
+
+- `MHT` / `MHTML` is a MIME multipart snapshot format: one file contains the main HTML document plus embedded resources such as images, stylesheets, and other referenced assets.
+- `.webarchive` is Apple's archived webpage format used by WebKit and Safari. It stores a main resource together with subresources in a structure Safari can reopen as a self-contained page.
+- This tool converts between those models by parsing the multipart `MHT` payload, decoding each part, resolving archived resource URLs, and re-emitting the result as a `WebArchive` made of `WebResource` entries.
+- In practice, the goal is format translation rather than visual re-authoring: preserve the captured page and its embedded assets closely enough that Safari can render the archive offline.
+
 ## Build
 
 ```bash
