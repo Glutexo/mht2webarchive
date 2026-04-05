@@ -91,6 +91,24 @@ struct IntegrationTestRunner {
         try expect(resources.count > 20, "expected many subresources from the fixture MHT")
         try expect(resources.contains(where: { $0.url?.absoluteString.hasPrefix("cid:css-") == true }), "expected cid stylesheet resources")
         try expect(resources.contains(where: { $0.mimeType == "image/webp" }), "expected webp image resources")
+
+        let mainHTML = try unwrap(String(data: mainResource.data, encoding: .utf8), "expected fixture HTML body")
+        try expect(
+            !mainHTML.contains("https://substackcdn.com/image/fetch/$s_!zhs4!,w_848,c_limit,f_webp,q_auto:good,fl_progressive:steep/"),
+            "expected missing hero image variant URLs to be rewritten"
+        )
+        try expect(
+            mainHTML.contains("https://substackcdn.com/image/fetch/$s_!zhs4!,w_1456,c_limit,f_webp,q_auto:good,fl_progressive:steep/"),
+            "expected embedded hero image variant URL to remain available"
+        )
+        try expect(
+            !mainHTML.contains("<source type=\"image/webp\" srcset=\"https://substackcdn.com/image/fetch/$s_!zhs4!"),
+            "expected hero picture source set to be removed for Safari compatibility"
+        )
+        try expect(
+            mainHTML.contains("<img src=\"https://substackcdn.com/image/fetch/$s_!zhs4!,w_1456,c_limit,f_auto,q_auto:good,fl_progressive:steep/"),
+            "expected hero image element to use Safari-friendly fallback"
+        )
     }
 
     private static func testStdinToFileMode() throws {
