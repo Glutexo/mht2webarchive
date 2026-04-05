@@ -22,9 +22,21 @@ let package = Package(
         .target(
             name: "MHTWebArchiveCore"
         ),
+        .target(
+            name: "MHTWebArchiveCLI",
+            dependencies: ["MHTWebArchiveCore"]
+        ),
         .executableTarget(
             name: "mht2webarchive",
-            dependencies: ["MHTWebArchiveCore"]
+            dependencies: ["MHTWebArchiveCLI"]
+        ),
+        .executableTarget(
+            name: "mht2webarchiveIntegrationTests",
+            dependencies: [
+                "MHTWebArchiveCore",
+                "MHTWebArchiveCLI",
+            ],
+            path: "Tests/mht2webarchiveTests"
         ),
     ],
     swiftLanguageModes: [.v6]

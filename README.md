@@ -8,6 +8,12 @@ Small macOS CLI that converts `MHT` / `MHTML` files into Safari-compatible `.web
 swift build
 ```
 
+## Test
+
+```bash
+swift run mht2webarchiveIntegrationTests
+```
+
 ## Run
 
 ```bash
