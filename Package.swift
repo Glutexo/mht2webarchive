@@ -20,7 +20,11 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "MHTWebArchiveCore"
+            name: "MHTWebArchiveSubstackCompatibility"
+        ),
+        .target(
+            name: "MHTWebArchiveCore",
+            dependencies: ["MHTWebArchiveSubstackCompatibility"]
         ),
         .target(
             name: "MHTWebArchiveCLI",
