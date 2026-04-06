@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -40,7 +41,7 @@ public struct ImageAliasResource {
 }
 
 public enum ImageVariantSafariCompatibility {
-    public static func rewriteHTML(in parts: inout [ImageCompatibilityPart]) {
+    public static func rewriteHTML(in parts: inout [ImageCompatibilityPart]) -> Set<String> {
         let resolvedURLs = parts.compactMap { $0.resolvedURL?.absoluteString }
         let availableVariants = parts.compactMap { part -> VariantURL? in
             guard let urlString = part.resolvedURL?.absoluteString else {
@@ -48,15 +49,11 @@ public enum ImageVariantSafariCompatibility {
             }
             return VariantURL(urlString: urlString)
         }
-        let syntheticAliasVariants = availableVariants.compactMap { variant -> VariantURL? in
-            guard variant.format == "f_webp" else {
+        let syntheticAliasVariants = parts.compactMap { part -> VariantURL? in
+            guard let aliasResource = makeAliasResource(for: part) else {
                 return nil
             }
-            let aliasURL = variant.urlString.replacingOccurrences(of: ",f_webp,", with: ",f_auto,")
-            guard aliasURL != variant.urlString else {
-                return nil
-            }
-            return VariantURL(urlString: aliasURL)
+            return VariantURL(urlString: aliasResource.url.absoluteString)
         }
         let availableURLs = Set(resolvedURLs + syntheticAliasVariants.map(\.urlString))
         let allVariants = availableVariants + syntheticAliasVariants
@@ -69,9 +66,10 @@ public enum ImageVariantSafariCompatibility {
         }
 
         guard !preferredURLsByAsset.isEmpty else {
-            return
+            return []
         }
 
+        var requiredAliasURLs: Set<String> = []
         for index in parts.indices where parts[index].mimeType.lowercased() == "text/html" {
             guard let html = parts[index].decodedString else {
                 continue
@@ -79,6 +77,12 @@ public enum ImageVariantSafariCompatibility {
 
             var rewrittenHTML = rewritePictureBlocks(
                 in: html,
+                availableURLs: availableURLs,
+                preferredURLsByAsset: preferredURLsByAsset
+            )
+
+            rewrittenHTML = rewriteSourceSrcsets(
+                in: rewrittenHTML,
                 availableURLs: availableURLs,
                 preferredURLsByAsset: preferredURLsByAsset
             )
@@ -92,33 +96,20 @@ public enum ImageVariantSafariCompatibility {
             if rewrittenHTML != html {
                 parts[index].decodedBody = Data(rewrittenHTML.utf8)
             }
+            requiredAliasURLs.formUnion(referencedAliasURLs(in: rewrittenHTML))
         }
+
+        return requiredAliasURLs
     }
 
-    public static func aliasResources(for part: ImageCompatibilityPart) -> [ImageAliasResource] {
+    public static func aliasResources(for part: ImageCompatibilityPart, requiredAliasURLs: Set<String>) -> [ImageAliasResource] {
         guard
-            let resolvedURL = part.resolvedURL,
-            part.mimeType.lowercased().hasPrefix("image/"),
-            let variant = VariantURL(urlString: resolvedURL.absoluteString),
-            variant.format == "f_webp"
+            let aliasResource = makeAliasResource(for: part),
+            requiredAliasURLs.contains(aliasResource.url.absoluteString)
         else {
             return []
         }
-
-        let aliasURLString = variant.urlString.replacingOccurrences(of: ",f_webp,", with: ",f_auto,")
-        guard aliasURLString != variant.urlString, let aliasURL = URL(string: aliasURLString) else {
-            return []
-        }
-
-        let aliasPayload = transcodeImageDataIfNeeded(part.decodedBody, aliasURL: aliasURL)
-        return [
-            ImageAliasResource(
-                data: aliasPayload.data,
-                url: aliasURL,
-                mimeType: aliasPayload.mimeType,
-                textEncodingName: part.charset
-            )
-        ]
+        return [aliasResource]
     }
 
     private static func transcodeImageDataIfNeeded(_ data: Data, aliasURL: URL) -> (data: Data, mimeType: String) {
@@ -127,15 +118,7 @@ public enum ImageVariantSafariCompatibility {
             return (data, "image/webp")
         }
 
-        let fetchedOriginalAsset = fetchOriginalAssetDataIfAvailable(for: aliasURL)
-        if fetchedOriginalAsset.mimeType != "image/webp" {
-            return fetchedOriginalAsset
-        }
-
-        guard
-            let source = CGImageSourceCreateWithData(data as CFData, nil),
-            let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-        else {
+        guard let image = decodedCGImage(from: data) else {
             return (data, "image/webp")
         }
         let destinationData = NSMutableData()
@@ -167,6 +150,29 @@ public enum ImageVariantSafariCompatibility {
         return (destinationData as Data, "image/jpeg")
     }
 
+    private static func decodedCGImage(from data: Data) -> CGImage? {
+        if
+            let source = CGImageSourceCreateWithData(data as CFData, nil),
+            let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        {
+            return image
+        }
+
+        guard let image = NSImage(data: data) else {
+            return nil
+        }
+
+        var proposedRect = NSRect(origin: .zero, size: image.size)
+        if let cgImage = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) {
+            return cgImage
+        }
+
+        guard let bitmap = NSBitmapImageRep(data: data) else {
+            return nil
+        }
+        return bitmap.cgImage
+    }
+
     private static func preferredAliasImageExtension(for aliasURL: URL) -> String {
         if let variant = VariantURL(urlString: aliasURL.absoluteString) {
             return variant.originalAssetExtension
@@ -174,24 +180,50 @@ public enum ImageVariantSafariCompatibility {
         return aliasURL.pathExtension.lowercased()
     }
 
-    private static func fetchOriginalAssetDataIfAvailable(for aliasURL: URL) -> (data: Data, mimeType: String) {
-        guard let originalAssetURL = VariantURL(urlString: aliasURL.absoluteString)?.originalAssetURL else {
-            return (Data(), "image/webp")
+    private static func makeAliasResource(for part: ImageCompatibilityPart) -> ImageAliasResource? {
+        guard
+            let resolvedURL = part.resolvedURL,
+            part.mimeType.lowercased().hasPrefix("image/"),
+            let variant = VariantURL(urlString: resolvedURL.absoluteString),
+            variant.format == "f_webp"
+        else {
+            return nil
         }
 
-        do {
-            let fetchedData = try Data(contentsOf: originalAssetURL)
-            switch originalAssetURL.pathExtension.lowercased() {
-            case "png":
-                return (fetchedData, "image/png")
-            case "jpg", "jpeg":
-                return (fetchedData, "image/jpeg")
-            default:
-                return (Data(), "image/webp")
-            }
-        } catch {
-            return (Data(), "image/webp")
+        let aliasURLString = variant.urlString.replacingOccurrences(of: ",f_webp,", with: ",f_auto,")
+        guard aliasURLString != variant.urlString, let aliasURL = URL(string: aliasURLString) else {
+            return nil
         }
+
+        let aliasPayload = transcodeImageDataIfNeeded(part.decodedBody, aliasURL: aliasURL)
+        guard aliasPayload.mimeType != "image/webp" else {
+            return nil
+        }
+
+        return ImageAliasResource(
+            data: aliasPayload.data,
+            url: aliasURL,
+            mimeType: aliasPayload.mimeType,
+            textEncodingName: part.charset
+        )
+    }
+
+    private static func referencedAliasURLs(in html: String) -> Set<String> {
+        guard let regex = try? NSRegularExpression(pattern: #"https?://[^"'\s<>)]+"#) else {
+            return []
+        }
+
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        return Set(regex.matches(in: html, range: range).compactMap { match in
+            guard let urlRange = Range(match.range, in: html) else {
+                return nil
+            }
+            let url = String(html[urlRange])
+            guard url.contains(",f_auto,"), VariantURL(urlString: url) != nil else {
+                return nil
+            }
+            return url
+        })
     }
 
     private static func rewriteImageURLs(
@@ -233,6 +265,87 @@ public enum ImageVariantSafariCompatibility {
         }
 
         return rewrittenHTML
+    }
+
+    private static func rewriteSourceSrcsets(
+        in html: String,
+        availableURLs: Set<String>,
+        preferredURLsByAsset: [String: String]
+    ) -> String {
+        guard let sourceRegex = try? NSRegularExpression(pattern: #"<source\b[^>]*\bsrcset=\"([^\"]+)\"[^>]*>"#) else {
+            return html
+        }
+
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        let matches = sourceRegex.matches(in: html, range: range)
+        guard !matches.isEmpty else {
+            return html
+        }
+
+        var rewrittenHTML = html
+        for match in matches.reversed() {
+            guard
+                let sourceRange = Range(match.range, in: rewrittenHTML),
+                let srcsetCaptureRange = Range(match.range(at: 1), in: rewrittenHTML)
+            else {
+                continue
+            }
+
+            let sourceTag = String(rewrittenHTML[sourceRange])
+            let srcsetValue = String(rewrittenHTML[srcsetCaptureRange])
+            let rewrittenSrcset = rewriteSrcsetValue(
+                srcsetValue,
+                availableURLs: availableURLs,
+                preferredURLsByAsset: preferredURLsByAsset
+            )
+            guard rewrittenSrcset != srcsetValue else {
+                continue
+            }
+
+            let updatedSourceTag = sourceTag
+                .replacingOccurrences(of: srcsetValue, with: rewrittenSrcset)
+                .replacingOccurrences(of: #" type=\"image/webp\""#, with: "", options: .regularExpression)
+            rewrittenHTML.replaceSubrange(sourceRange, with: updatedSourceTag)
+        }
+
+        return rewrittenHTML
+    }
+
+    private static func rewriteSrcsetValue(
+        _ srcsetValue: String,
+        availableURLs: Set<String>,
+        preferredURLsByAsset: [String: String]
+    ) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"https?://[^"'\s,]+(?:,[^"'\s,]+)*"#) else {
+            return srcsetValue
+        }
+
+        let range = NSRange(srcsetValue.startIndex..<srcsetValue.endIndex, in: srcsetValue)
+        let matches = regex.matches(in: srcsetValue, range: range)
+        guard !matches.isEmpty else {
+            return srcsetValue
+        }
+
+        var rewritten = srcsetValue
+        for match in matches.reversed() {
+            guard let urlRange = Range(match.range, in: rewritten) else {
+                continue
+            }
+            let urlString = String(rewritten[urlRange])
+            guard let variant = VariantURL(urlString: urlString) else {
+                continue
+            }
+            let replacement = preferredHTMLImageURL(
+                for: variant,
+                availableURLs: availableURLs,
+                preferredURLsByAsset: preferredURLsByAsset
+            )
+            guard replacement != urlString else {
+                continue
+            }
+            rewritten.replaceSubrange(urlRange, with: replacement)
+        }
+        return rewritten
     }
 
     private static func rewritePictureBlocks(
@@ -399,7 +512,6 @@ private struct VariantURL {
     let assetKey: String
     let format: String?
     let width: Int
-    let originalAssetURL: URL?
     let originalAssetExtension: String
 
     init?(urlString: String) {
@@ -424,7 +536,7 @@ private struct VariantURL {
 
         let nestedEncodedURL = String(urlString[urlString.index(after: assetRange.lowerBound)...])
         let nestedDecodedURL = nestedEncodedURL.removingPercentEncoding
-        self.originalAssetURL = nestedDecodedURL.flatMap(URL.init(string:))
+        let originalAssetURL = nestedDecodedURL.flatMap(URL.init(string:))
         self.originalAssetExtension = originalAssetURL?.pathExtension.lowercased() ?? absoluteURL.pathExtension.lowercased()
     }
 }

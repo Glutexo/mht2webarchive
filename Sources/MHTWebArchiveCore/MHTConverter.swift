@@ -88,6 +88,11 @@ public enum MHTConverter {
         let subresources = try resolvedParts
             .filter { $0.index != mainPart.index }
             .flatMap { part throws -> [WebResource] in
+                let aliasResources = try makeImageAliasResources(for: part)
+                if part.mimeType.lowercased() == "image/webp", aliasResources.isEmpty {
+                    return []
+                }
+
                 guard let resource = WebResource(
                     data: part.decodedBody,
                     url: part.resolvedURL ?? fallbackResourceURL(from: mainURL, index: part.index, mimeType: part.mimeType),
@@ -97,7 +102,6 @@ public enum MHTConverter {
                 ) else {
                     throw MHTConversionError.archiveCreationFailed
                 }
-                let aliasResources = try makeImageAliasResources(for: part)
                 return [resource] + aliasResources
             }
 
@@ -175,9 +179,10 @@ public enum MHTConverter {
                 decodedBody: part.decodedBody
             )
         }
-        ImageVariantSafariCompatibility.rewriteHTML(in: &compatibilityParts)
+        let requiredAliasURLs = ImageVariantSafariCompatibility.rewriteHTML(in: &compatibilityParts)
         for index in parts.indices {
             parts[index].decodedBody = compatibilityParts[index].decodedBody
+            parts[index].requiredAliasURLs = requiredAliasURLs
         }
     }
 
@@ -190,7 +195,10 @@ public enum MHTConverter {
             decodedBody: part.decodedBody
         )
 
-        return try ImageVariantSafariCompatibility.aliasResources(for: compatibilityPart).map { alias in
+        return try ImageVariantSafariCompatibility.aliasResources(
+            for: compatibilityPart,
+            requiredAliasURLs: part.requiredAliasURLs
+        ).map { alias in
             guard let resource = WebResource(
                 data: alias.data,
                 url: alias.url,
@@ -246,6 +254,7 @@ struct ResolvedPart {
     let contentLocation: String?
     let resolvedURL: URL?
     var decodedBody: Data
+    var requiredAliasURLs: Set<String> = []
 
     init(part: MIMEPart, index: Int, baseURL: URL?) throws {
         self.index = index
