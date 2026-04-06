@@ -20,11 +20,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "MHTWebArchiveImageCompatibility"
-        ),
-        .target(
-            name: "MHTWebArchiveCore",
-            dependencies: ["MHTWebArchiveImageCompatibility"]
+            name: "MHTWebArchiveCore"
         ),
         .target(
             name: "MHTWebArchiveCLI",
