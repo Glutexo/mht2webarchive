@@ -86,57 +86,30 @@ struct IntegrationTestRunner {
             mainResource.url?.absoluteString == "https://www.noahpinion.blog/p/how-japan-has-changed-in-the-last?utm_campaign=email-post&r=27g416&utm_source=substack&utm_medium=email",
             "expected fixture main resource URL"
         )
-
         let resources = (archive.subresources as? [WebResource]) ?? []
         try expect(resources.count > 20, "expected many subresources from the fixture MHT")
         try expect(resources.contains(where: { $0.url?.absoluteString.hasPrefix("cid:css-") == true }), "expected cid stylesheet resources")
         try expect(resources.contains(where: { $0.mimeType == "image/webp" }), "expected webp image resources")
         try expect(
-            embeddedAliasSize(in: resources, matching: "$s_!JWyd!,w_96,h_96,c_fill") ?? 0 < 50_000,
-            "expected Safari alias image to be derived from embedded data instead of the original full-size asset"
-        )
-        try expect(
             resources.contains(where: {
-                $0.url?.absoluteString == "https://substackcdn.com/image/fetch/$s_!l14h!,w_96,h_96,c_fill,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fbucketeer-e05bbc84-baa3-437e-9518-adb32be77984.s3.amazonaws.com%2Fpublic%2Fimages%2F04281755-2cd6-42e5-a496-e69153abebb2_281x281.png"
-            }),
-            "expected decodable picture source variants to gain a Safari alias resource"
-        )
-        try expect(
-            !resources.contains(where: {
                 $0.url?.absoluteString == "https://substackcdn.com/image/fetch/$s_!zhs4!,w_1456,c_limit,f_webp,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F4ddf7ac2-3089-4a2d-953b-6df5f982abd1_2048x1310.jpeg"
             }),
-            "expected undecodable webp resources to be dropped from the archive"
+            "expected raw hero webp resource to remain embedded"
         )
-
         let mainHTML = try unwrap(String(data: mainResource.data, encoding: .utf8), "expected fixture HTML body")
         try expect(
-            !mainHTML.contains("https://substackcdn.com/image/fetch/$s_!zhs4!,w_848,c_limit,f_webp,q_auto:good,fl_progressive:steep/"),
-            "expected missing hero image variant URLs to be rewritten"
+            mainHTML.contains("https://substackcdn.com/image/fetch/$s_!zhs4!,w_848,c_limit,f_webp,q_auto:good,fl_progressive:steep/"),
+            "expected original fixture hero image variant URLs to remain unchanged"
         )
         try expect(
             mainHTML.contains("https://substackcdn.com/image/fetch/$s_!zhs4!,w_1456,c_limit,f_webp,q_auto:good,fl_progressive:steep/"),
             "expected embedded hero image variant URL to remain available"
         )
         try expect(
-            !mainHTML.contains("<source type=\"image/webp\" srcset=\"https://substackcdn.com/image/fetch/$s_!zhs4!"),
-            "expected hero picture source set to be removed for Safari compatibility"
-        )
-        try expect(
-            mainHTML.contains("<img src=\"https://substackcdn.com/image/fetch/$s_!zhs4!,w_1456,c_limit,f_webp,q_auto:good,fl_progressive:steep/"),
-            "expected hero image element to keep the embedded webp URL when a Safari fallback cannot be produced"
-        )
-        try expect(
-            mainHTML.contains("https://substackcdn.com/image/fetch/$s_!l14h!,w_96,h_96,c_fill,f_auto,q_auto:good,fl_progressive:steep/"),
-            "expected picture source URLs to be rewritten to Safari aliases when decoding succeeds"
-        )
-        try expect(
-            !resources.contains(where: {
-                $0.url?.absoluteString == "https://substackcdn.com/image/fetch/$s_!zhs4!,w_1456,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F4ddf7ac2-3089-4a2d-953b-6df5f982abd1_2048x1310.jpeg"
-            }),
-            "expected no Safari alias resource when transcoding would still leave the asset as webp"
+            mainHTML.contains("<source type=\"image/webp\" srcset=\"https://substackcdn.com/image/fetch/$s_!zhs4!"),
+            "expected original picture source set to remain unchanged"
         )
     }
-
     private static func testStdinToFileMode() throws {
         try withTemporaryDirectory { directory in
             let outputURL = directory.appendingPathComponent("stdin.webarchive")
@@ -287,12 +260,6 @@ private func expect(_ condition: Bool, _ message: String) throws {
     }
 }
 
-private func embeddedAliasSize(in resources: [WebResource], matching fragment: String) -> Int? {
-    resources.first {
-        $0.url?.absoluteString.contains(fragment) == true &&
-        $0.url?.absoluteString.contains(",f_auto,") == true
-    }?.data.count
-}
 
 private struct TestFailure: LocalizedError {
     let errorDescription: String?

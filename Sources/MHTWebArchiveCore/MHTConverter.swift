@@ -1,6 +1,5 @@
 import Foundation
 import WebKit
-import MHTWebArchiveImageCompatibility
 
 public enum MHTConversionError: Error, LocalizedError {
     case invalidMHT(String)
@@ -67,11 +66,9 @@ public enum MHTConverter {
             ?? URL(string: message.headers["content-base"] ?? "")
             ?? sourceURL
 
-        var resolvedParts = try parts.enumerated().map { index, part in
+        let resolvedParts = try parts.enumerated().map { index, part in
             try ResolvedPart(part: part, index: index, baseURL: baseURL)
         }
-
-        applyImageCompatibility(to: &resolvedParts)
 
         let mainPart = try selectMainPart(from: resolvedParts, startHint: contentType.parameters["start"])
         let mainURL = mainPart.resolvedURL ?? sourceURL ?? URL(fileURLWithPath: "/")
@@ -88,11 +85,6 @@ public enum MHTConverter {
         let subresources = try resolvedParts
             .filter { $0.index != mainPart.index }
             .flatMap { part throws -> [WebResource] in
-                let aliasResources = try makeImageAliasResources(for: part)
-                if part.mimeType.lowercased() == "image/webp", aliasResources.isEmpty {
-                    return []
-                }
-
                 guard let resource = WebResource(
                     data: part.decodedBody,
                     url: part.resolvedURL ?? fallbackResourceURL(from: mainURL, index: part.index, mimeType: part.mimeType),
@@ -102,7 +94,7 @@ public enum MHTConverter {
                 ) else {
                     throw MHTConversionError.archiveCreationFailed
                 }
-                return [resource] + aliasResources
+                return [resource]
             }
 
         guard let archive = WebArchive(mainResource: mainResource, subresources: subresources, subframeArchives: nil) else {
@@ -169,48 +161,6 @@ public enum MHTConverter {
         }
     }
 
-    private static func applyImageCompatibility(to parts: inout [ResolvedPart]) {
-        var compatibilityParts = parts.map { part in
-            ImageCompatibilityPart(
-                index: part.index,
-                mimeType: part.mimeType,
-                charset: part.charset,
-                resolvedURL: part.resolvedURL,
-                decodedBody: part.decodedBody
-            )
-        }
-        let requiredAliasURLs = ImageVariantSafariCompatibility.rewriteHTML(in: &compatibilityParts)
-        for index in parts.indices {
-            parts[index].decodedBody = compatibilityParts[index].decodedBody
-            parts[index].requiredAliasURLs = requiredAliasURLs
-        }
-    }
-
-    private static func makeImageAliasResources(for part: ResolvedPart) throws -> [WebResource] {
-        let compatibilityPart = ImageCompatibilityPart(
-            index: part.index,
-            mimeType: part.mimeType,
-            charset: part.charset,
-            resolvedURL: part.resolvedURL,
-            decodedBody: part.decodedBody
-        )
-
-        return try ImageVariantSafariCompatibility.aliasResources(
-            for: compatibilityPart,
-            requiredAliasURLs: part.requiredAliasURLs
-        ).map { alias in
-            guard let resource = WebResource(
-                data: alias.data,
-                url: alias.url,
-                mimeType: alias.mimeType,
-                textEncodingName: alias.textEncodingName,
-                frameName: nil
-            ) else {
-                throw MHTConversionError.archiveCreationFailed
-            }
-            return resource
-        }
-    }
 }
 
 struct MIMEMessage {
@@ -254,7 +204,6 @@ struct ResolvedPart {
     let contentLocation: String?
     let resolvedURL: URL?
     var decodedBody: Data
-    var requiredAliasURLs: Set<String> = []
 
     init(part: MIMEPart, index: Int, baseURL: URL?) throws {
         self.index = index
